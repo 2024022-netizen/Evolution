@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Evolution Simulator: Idle Warfare</title>
+    <title>Evolution Simulator 3.0</title>
     <style>
-        /* CSS: This makes the game look good */
+        /* --- VISUAL STYLES --- */
         :root {
             --primary: #4CAF50;
             --danger: #e74c3c;
@@ -26,7 +26,7 @@
             user-select: none;
         }
 
-        /* --- LEFT PANEL: THE WORLD --- */
+        /* GAME WORLD (LEFT) */
         #world {
             flex: 2;
             background: #111;
@@ -36,7 +36,6 @@
             cursor: crosshair;
         }
 
-        /* Canvas for Lasers/Effects */
         #effects-layer {
             position: absolute;
             top: 0; left: 0;
@@ -45,7 +44,6 @@
             z-index: 20;
         }
 
-        /* The Player Creature */
         #player {
             width: 60px;
             height: 60px;
@@ -63,7 +61,6 @@
             transition: width 0.3s, height 0.3s;
         }
 
-        /* Range Indicator (faint circle) */
         #range-indicator {
             position: absolute;
             top: 50%; left: 50%;
@@ -74,7 +71,6 @@
             z-index: 1;
         }
 
-        /* Entity Styles */
         .entity {
             position: absolute;
             border-radius: 50%;
@@ -95,7 +91,6 @@
             z-index: 6;
         }
 
-        /* Floating Text */
         .floater {
             position: absolute;
             pointer-events: none;
@@ -110,7 +105,7 @@
             100% { opacity: 0; transform: translateY(-40px) scale(0.8); }
         }
 
-        /* --- RIGHT PANEL: CONTROLS --- */
+        /* CONTROL PANEL (RIGHT) */
         #hud {
             flex: 1;
             padding: 20px;
@@ -173,7 +168,6 @@
             font-size: 0.9em;
         }
 
-        /* Game Over Modal */
         #game-over {
             position: fixed;
             top: 0; left: 0; width: 100%; height: 100%;
@@ -214,4 +208,330 @@
         <div id="dna-counter">🧬 0</div>
         
         <div class="stats-grid">
-            <div>Health: <span id="stat-hp" style="color:#e
+            <div>Health: <span id="stat-hp" style="color:#e74c3c">100</span></div>
+            <div>Dmg: <span id="stat-dmg" style="color:#3498db">5</span></div>
+            <div>Range: <span id="stat-rng">150</span></div>
+            <div>Atk Spd: <span id="stat-aspd">1.0/s</span></div>
+        </div>
+
+        <div style="background: #333; height: 10px; border-radius: 5px; overflow: hidden;">
+            <div id="hp-bar" style="width: 100%; height: 100%; background: #e74c3c; transition: width 0.2s;"></div>
+        </div>
+
+        <h3 style="margin-bottom: 5px;">Evolution Chamber</h3>
+        <div id="evolution-list"></div>
+    </div>
+
+<script>
+    // --- GAME ENGINE ---
+    const canvas = document.getElementById('effects-layer');
+    const ctx = canvas.getContext('2d');
+    
+    // Canvas sizing
+    function resizeCanvas() {
+        canvas.width = document.getElementById('world').offsetWidth;
+        canvas.height = document.getElementById('world').offsetHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    setTimeout(resizeCanvas, 100);
+
+    // Game Variables
+    const game = {
+        dna: 0,
+        totalDna: 0,
+        hp: 100,
+        maxHp: 100,
+        damage: 10,
+        range: 150,
+        attackCooldownMax: 60, 
+        currentCooldown: 0,
+        regen: 0,
+        isDead: false,
+        evolutions: [],
+        entities: []
+    };
+
+    // Upgrades
+    const evolutions = [
+        {
+            id: 'eyes', name: 'Compound Eyes', cost: 25,
+            desc: 'Range +50. Shoot further.',
+            effect: () => { game.range += 50; updateRangeVisual(); }
+        },
+        {
+            id: 'muscles', name: 'Twitch Muscles', cost: 60,
+            desc: 'Attack Speed +20%.',
+            effect: () => { game.attackCooldownMax = Math.max(5, game.attackCooldownMax * 0.8); }
+        },
+        {
+            id: 'teeth', name: 'Razor Teeth', cost: 150,
+            desc: 'Damage +10.',
+            effect: () => { game.damage += 10; }
+        },
+        {
+            id: 'scales', name: 'Hardened Scales', cost: 300,
+            desc: '+100 Max Health.',
+            effect: () => { game.maxHp += 100; game.hp += 100; }
+        },
+        {
+            id: 'metabolism', name: 'Rapid Metabolism', cost: 600,
+            desc: 'Regenerate 1 HP per second.',
+            effect: () => { game.regen += 1; }
+        },
+        {
+            id: 'tentacles', name: 'Giant Tentacles', cost: 1500,
+            desc: 'Massive Range (+150).',
+            effect: () => { game.range += 150; updateRangeVisual(); }
+        },
+        {
+            id: 'apex', name: 'Apex Predator', cost: 5000,
+            desc: 'Damage +50, Attack Speed +50%.',
+            effect: () => { game.damage += 50; game.attackCooldownMax *= 0.5; }
+        }
+    ];
+
+    // --- GAME LOOPS ---
+    function start() {
+        renderShop();
+        updateRangeVisual();
+        requestAnimationFrame(loop); // Starts the visual loop
+        setInterval(spawnLogic, 800); // Starts the spawning
+        setInterval(passiveLogic, 1000); // Starts regen
+    }
+
+    function loop() {
+        if (game.isDead) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear lasers
+        updateEntities();
+        autoAttackSystem();
+        requestAnimationFrame(loop);
+    }
+
+    // --- COMBAT LOGIC ---
+    function autoAttackSystem() {
+        if (game.currentCooldown > 0) {
+            game.currentCooldown--;
+            return;
+        }
+
+        const pRect = document.getElementById('player').getBoundingClientRect();
+        const wRect = document.getElementById('world').getBoundingClientRect();
+        const px = pRect.left + pRect.width/2 - wRect.left;
+        const py = pRect.top + pRect.height/2 - wRect.top;
+
+        // Find Target
+        let closest = null;
+        let minDist = Infinity;
+        const preds = game.entities.filter(e => e.type === 'predator');
+        const targets = preds.length > 0 ? preds : game.entities.filter(e => e.type === 'prey');
+
+        targets.forEach(ent => {
+            const dist = Math.hypot(ent.x - px, ent.y - py);
+            if (dist < game.range && dist < minDist) {
+                minDist = dist;
+                closest = ent;
+            }
+        });
+
+        if (closest) {
+            damageEntity(closest, game.damage);
+            drawLaser(px, py, closest.x, closest.y, closest.type === 'predator' ? '#ff0000' : '#00ff00');
+            game.currentCooldown = game.attackCooldownMax;
+        }
+    }
+
+    function drawLaser(x1, y1, x2, y2, color) {
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = color;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = color;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+    }
+
+    function updateEntities() {
+        const wRect = document.getElementById('world').getBoundingClientRect();
+        const px = wRect.width / 2;
+        const py = wRect.height / 2;
+
+        game.entities.forEach(ent => {
+            // Movement
+            if (ent.type === 'predator') {
+                const angle = Math.atan2(py - ent.y, px - ent.x);
+                ent.x += Math.cos(angle) * ent.speed;
+                ent.y += Math.sin(angle) * ent.speed;
+
+                // Attack Player
+                if (Math.hypot(ent.x - px, ent.y - py) < 40) {
+                    if (game.currentCooldown % 10 === 0) {
+                        takeDamage(1);
+                        ent.x -= Math.cos(angle) * 10; // Knockback
+                        ent.y -= Math.sin(angle) * 10;
+                    }
+                }
+                // Eat Prey
+                game.entities.forEach(target => {
+                    if(target.type === 'prey' && Math.hypot(ent.x - target.x, ent.y - target.y) < 30) {
+                        killEntity(target, false); 
+                        ent.hp += 10;
+                        ent.el.style.transform = "scale(1.2) translate(-50%, -50%)";
+                        setTimeout(() => ent.el.style.transform = "scale(1) translate(-50%, -50%)", 200);
+                    }
+                });
+            } else {
+                ent.x += ent.vx; ent.y += ent.vy;
+                if(ent.x < 0 || ent.x > wRect.width) ent.vx *= -1;
+                if(ent.y < 0 || ent.y > wRect.height) ent.vy *= -1;
+            }
+            ent.el.style.left = ent.x + 'px';
+            ent.el.style.top = ent.y + 'px';
+        });
+    }
+
+    // --- SPAWNING ---
+    function spawnLogic() {
+        if(game.isDead) return;
+        const w = document.getElementById('world').getBoundingClientRect();
+        
+        if(game.entities.filter(e=>e.type==='prey').length < 12) {
+            spawnEntity('prey', w);
+        }
+
+        const predCount = game.entities.filter(e=>e.type==='predator').length;
+        const maxPreds = 2 + Math.floor(game.totalDna / 500);
+        
+        if(Math.random() < 0.3 && predCount < maxPreds) {
+            spawnEntity('predator', w);
+        }
+    }
+
+    function spawnEntity(type, rect) {
+        const id = Math.random().toString(36).substr(2, 9);
+        const el = document.createElement('div');
+        el.className = `entity ${type}`;
+        el.style.width = type==='prey'?'20px':'35px';
+        el.style.height = type==='prey'?'20px':'35px';
+        
+        let x, y;
+        if(Math.random() > 0.5) {
+            x = Math.random() > 0.5 ? -40 : rect.width + 40;
+            y = Math.random() * rect.height;
+        } else {
+            x = Math.random() * rect.width;
+            y = Math.random() > 0.5 ? -40 : rect.height + 40;
+        }
+
+        document.getElementById('world').appendChild(el);
+        game.entities.push({
+            id: id, el: el, type: type, x: x, y: y,
+            vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2,
+            hp: type==='predator' ? 20 + (game.totalDna/50) : 10,
+            speed: type==='predator' ? 1 + (Math.random()*1) : 0
+        });
+    }
+
+    function damageEntity(ent, amount) {
+        ent.hp -= amount;
+        ent.el.style.filter = "brightness(2)";
+        setTimeout(() => ent.el.style.filter = "none", 50);
+        if (ent.hp <= 0) {
+            const reward = ent.type === 'predator' ? 50 : 10;
+            killEntity(ent, true, reward);
+        }
+    }
+
+    function killEntity(ent, playerKilled, reward = 0) {
+        const idx = game.entities.indexOf(ent);
+        if (idx > -1) {
+            ent.el.remove();
+            game.entities.splice(idx, 1);
+            if (playerKilled) {
+                game.dna += reward;
+                game.totalDna += reward;
+                spawnFloater(ent.x, ent.y, `+${reward} DNA`);
+                updateUI();
+            }
+        }
+    }
+
+    function takeDamage(amount) {
+        game.hp -= amount;
+        if (game.hp <= 0) {
+            game.isDead = true;
+            document.getElementById('game-over').style.display = 'flex';
+            document.getElementById('final-score').innerText = game.totalDna;
+        }
+        updateUI();
+    }
+
+    function passiveLogic() {
+        if(game.isDead) return;
+        if(game.regen > 0 && game.hp < game.maxHp) {
+            game.hp = Math.min(game.hp + game.regen, game.maxHp);
+            updateUI();
+        }
+    }
+
+    // --- UI FUNCTIONS ---
+    function updateUI() {
+        document.getElementById('dna-counter').innerText = `🧬 ${Math.floor(game.dna)}`;
+        document.getElementById('stat-hp').innerText = `${Math.floor(game.hp)}/${game.maxHp}`;
+        document.getElementById('stat-dmg').innerText = game.damage;
+        document.getElementById('stat-rng').innerText = game.range;
+        document.getElementById('stat-aspd').innerText = (60 / game.attackCooldownMax).toFixed(1) + "/s";
+        document.getElementById('hp-bar').style.width = (game.hp / game.maxHp * 100) + "%";
+        renderShop();
+    }
+
+    function updateRangeVisual() {
+        const r = document.getElementById('range-indicator');
+        r.style.width = (game.range * 2) + "px";
+        r.style.height = (game.range * 2) + "px";
+    }
+
+    function spawnFloater(x, y, text) {
+        const f = document.createElement('div');
+        f.className = 'floater';
+        f.innerText = text;
+        f.style.left = x + 'px';
+        f.style.top = y + 'px';
+        f.style.color = 'white';
+        document.getElementById('world').appendChild(f);
+        setTimeout(() => f.remove(), 800);
+    }
+
+    function renderShop() {
+        const list = document.getElementById('evolution-list');
+        list.innerHTML = '';
+        evolutions.forEach(evo => {
+            const btn = document.createElement('button');
+            btn.className = 'evo-btn';
+            const isOwned = game.evolutions.includes(evo.id);
+            const canAfford = game.dna >= evo.cost;
+            if(isOwned) btn.classList.add('purchased');
+            btn.disabled = isOwned || !canAfford;
+            btn.innerHTML = `
+                <span class="cost-tag">${isOwned ? 'OWNED' : evo.cost}</span>
+                <strong>${evo.name}</strong><br>
+                <small style="color:#aaa">${evo.desc}</small>
+            `;
+            btn.onclick = () => {
+                if(!isOwned && canAfford) {
+                    game.dna -= evo.cost;
+                    game.evolutions.push(evo.id);
+                    evo.effect();
+                    updateUI();
+                }
+            };
+            list.appendChild(btn);
+        });
+    }
+
+    // --- START GAME ---
+    start();
+</script>
+</body>
+</html>
