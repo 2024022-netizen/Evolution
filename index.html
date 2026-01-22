@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Evolution Simulator: Idle Warfare</title>
+    <style>
+        /* CSS: This makes the game look good */
+        :root {
+            --primary: #4CAF50;
+            --danger: #e74c3c;
+            --food: #2ecc71;
+            --dark: #1a1a1a;
+            --panel: #2a2a2a;
+            --text: #eee;
+        }
+
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--dark);
+            color: var(--text);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        /* --- LEFT PANEL: THE WORLD --- */
+        #world {
+            flex: 2;
+            background: #111;
+            position: relative;
+            overflow: hidden;
+            border-right: 2px solid #444;
+            cursor: crosshair;
+        }
+
+        /* Canvas for Lasers/Effects */
+        #effects-layer {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 20;
+        }
+
+        /* The Player Creature */
+        #player {
+            width: 60px;
+            height: 60px;
+            background-color: #3498db;
+            border-radius: 50%;
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            box-shadow: 0 0 20px rgba(52, 152, 219, 0.4);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border: 2px solid rgba(255,255,255,0.2);
+            transition: width 0.3s, height 0.3s;
+        }
+
+        /* Range Indicator (faint circle) */
+        #range-indicator {
+            position: absolute;
+            top: 50%; left: 50%;
+            border: 1px dashed rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* Entity Styles */
+        .entity {
+            position: absolute;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            transition: transform 0.1s;
+        }
+
+        .prey {
+            background-color: var(--food);
+            box-shadow: 0 0 5px var(--food);
+            z-index: 5;
+        }
+
+        .predator {
+            background-color: var(--danger);
+            border: 2px solid #c0392b;
+            box-shadow: 0 0 10px var(--danger);
+            z-index: 6;
+        }
+
+        /* Floating Text */
+        .floater {
+            position: absolute;
+            pointer-events: none;
+            font-weight: bold;
+            animation: floatUp 0.8s forwards;
+            z-index: 100;
+            text-shadow: 1px 1px 0 #000;
+        }
+
+        @keyframes floatUp {
+            0% { opacity: 1; transform: translateY(0) scale(1); }
+            100% { opacity: 0; transform: translateY(-40px) scale(0.8); }
+        }
+
+        /* --- RIGHT PANEL: CONTROLS --- */
+        #hud {
+            flex: 1;
+            padding: 20px;
+            background-color: var(--panel);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            min-width: 320px;
+            border-left: 2px solid #000;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            font-size: 0.9em;
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        #dna-counter { 
+            font-size: 2.2em; 
+            color: #f1c40f; 
+            text-align: center; 
+            margin: 5px 0; 
+            text-shadow: 0 0 10px rgba(241, 196, 15, 0.3);
+        }
+        
+        #evolution-list {
+            flex-grow: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding-right: 5px;
+        }
+
+        button.evo-btn {
+            background: #444;
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            text-align: left;
+            border-left: 4px solid #666;
+        }
+
+        button.evo-btn:hover:not(:disabled) { background: #555; margin-left: 2px; }
+        button.evo-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        button.purchased { border-left-color: var(--primary); background: #263829; }
+        
+        .cost-tag {
+            background: rgba(0,0,0,0.5);
+            padding: 2px 8px;
+            border-radius: 10px;
+            float: right;
+            color: #f1c40f;
+            font-size: 0.9em;
+        }
+
+        /* Game Over Modal */
+        #game-over {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.95);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+        }
+        #restart-btn {
+            margin-top: 20px;
+            padding: 15px 40px;
+            font-size: 1.5em;
+            background: var(--primary);
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-over">
+        <h1 style="color: #e74c3c; font-size: 3em;">EXTINCTION</h1>
+        <p>Total Biomass Collected: <span id="final-score">0</span></p>
+        <button id="restart-btn" onclick="location.reload()">Re-Evolve</button>
+    </div>
+
+    <div id="world">
+        <canvas id="effects-layer"></canvas>
+        <div id="range-indicator"></div>
+        <div id="player"></div>
+    </div>
+
+    <div id="hud">
+        <div id="dna-counter">🧬 0</div>
+        
+        <div class="stats-grid">
+            <div>Health: <span id="stat-hp" style="color:#e
